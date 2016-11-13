@@ -3,3 +3,15 @@ ResidualCov = ResidualAll.T.cov()
 #Get the Covariance Matrix of the Factor Earnings
 BetaAll = pd.concat([RSIBeta,MinBeta,SizeBeta,OCFPBeta],axis = 0,join='outer')
 BetaCov = BetaAll.T.cov()
+
+
+#Get the Variance of Stock Portfolio
+import math as math
+#Factor Loading is n*4
+#w is 1*n
+def MyVar(w,BetaCov,ResidualCov,FactorLoading):
+    part1 = np.multiply(FactorLoading,BetaCov)
+    part2 = np.multiply(part1,FactorLoading.T) + ResidualCov
+    part3 = np.multiply(w.T,part2)
+    part4 = np.multiply(part3,w)
+    return math.sqrt(part4)
