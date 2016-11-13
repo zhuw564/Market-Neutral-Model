@@ -1,1 +1,156 @@
 
+#The factors that we select in this strategy
+#Also, we use linear Regression First, later can be changed to WLS like in the report of GuoTaiJunAn
+#let's start from smaller ones (4 items) and then add them more and more
+#Here the factors are already normalized
+def RSIIndividual(stock,end):
+    window_length = 14
+    start = "{:%Y-%m-%d}".format(datetime.datetime.strptime(end, '%Y-%m-%d') - datetime.timedelta(days=window_length))
+    data = get_price(list(stock), start, end_date=end, frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    close = data
+    delta = close.diff()
+    delta = delta[1:]
+    up, down = delta.copy(), delta.copy()
+    up[up < 0] = 0
+    down[down > 0] = 0
+    roll_up1 = pd.stats.moments.ewma(up, window_length)
+    roll_down1 = pd.stats.moments.ewma(down.abs(), window_length)
+    RS1 = roll_up1 / roll_down1
+    RSI1 = 100.0 - (100.0 / (1.0 + RS1))
+    FactorValue = RSI1.iloc[-1]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+
+def Min130Day(stock,enddate): 
+    startdate = "{:%Y-%m-%d}".format(datetime.datetime.strptime(enddate, '%Y-%m-%d') - datetime.timedelta(days=130))
+    if len(stock) != 0 :
+        prices = get_price(list(stock), startdate, end_date=enddate, frequency='1d', fields=None, adjusted=True)['OpeningPx']
+        returns = np.log(prices/prices.shift(1)).iloc[1:-1]
+        MinReturn = returns.min()
+        FactorValue = MinReturn
+        FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+        return FactorValue
+    else:
+        return pd.Series(1000, index = ['000001.XSHE'])
+
+    
+#Thing is that sometimes the date that we input is not working day, if so, we select the most recent working day's value as the value for this
+def EquitySize(stock,enddate):
+    date = enddate
+    fundamental_df = get_fundamentals(
+        query(
+            fundamentals.eod_derivative_indicator.market_cap 
+        ).filter(
+            fundamentals.income_statement.stockcode.in_(stock)
+        ),entry_date = date
+    )
+    FactorValue = fundamental_df['market_cap'].iloc[0]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+    
+def EquityOCFP(stock,enddate):
+    date = enddate
+    fundamental_df = get_fundamentals(
+        query(
+            fundamentals.financial_indicator.operating_cash_flow_per_share 
+        ).filter(
+            fundamentals.income_statement.stockcode.in_(stock)
+        ),entry_date = date
+    )
+    prices = get_price(list(stock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=10)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    FactorValue = fundamental_df['operating_cash_flow_per_share'].iloc[0]/prices.iloc[0]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+
+
+def GetIC(f,*args):
+    FactorValue = f(*args)
+    date = args[1]
+    tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    tempreturn = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
+    DataAll = pd.concat([FactorValue,tempreturn],axis = 1)
+    DataAll = DataAll.dropna()
+    return np.corrcoef(np.array(DataAll.ix[:,0].T.rank().T),np.array(DataAll.ix[:,1].T.rank().T))[0,1]
+
+def GetBeta(f,*args):
+    FactorValue = f(*args)
+    date = args[1]
+    tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    tempreturn = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
+    DataAll = pd.concat([FactorValue,tempreturn],axis = 1)
+    DataAll = DataAll.dropna()
+    regr = linear_model.LinearRegression()
+    regr.fit(np.transpose(np.matrix(DataAll.ix[:,0])), np.transpose(np.matrix(DataAll.ix[:,1])))
+    return regr.coef_
+
+def GetResiduals(stock,enddate):
+    Xinput = [EquityOCFP(stock,enddate), EquitySize(stock,enddate), RSIIndividual(stock,enddate), Min130Day(stock,enddate)]
+    X = pd.concat(Xinput, axis=1)
+    date = enddate
+    tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    y = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
+    DataAll = pd.concat([X,y],axis = 1)
+    DataAll = DataAll.dropna()
+    regr = linear_model.LinearRegression()
+    regr.fit(np.matrix(DataAll.ix[:,0:4]), np.transpose(np.matrix(DataAll.ix[:,4])))
+    residuals = regr.predict(np.matrix(DataAll.ix[:,0:4])) - np.transpose(np.matrix(DataAll.ix[:,4]))
+    residuals = pd.DataFrame(data = residuals, index = np.transpose(np.matrix(DataAll.index.values)))
+    residuals.index = DataAll.index.values
+    residuals.columns = [enddate]
+    return residuals
+
+GetBeta(EquitySize,AllStock,enddatel[0])
+GetResiduals(stock,enddatel[0])
+
+#Prepare
+import pandas as pd
+import talib
+import datetime as datetime
+import numpy as np
+import matplotlib.pyplot as plt
+import numpy as np
+from sklearn import datasets, linear_model
+AllStock = index_components('000300.XSHG')
+stock = AllStock
+#Define StartDate and EndDate List
+enddatel = list()
+#Define a list of EndDates
+for j in list(range(8,14)):
+    if j%10 == j:
+        year = '200' + str(j)
+    else:
+        year = '20' + str(j)
+    for i in list(range(1,13)):
+        if i%10 == i:
+            month = '0' + str(i)
+        else:
+            month = str(i)
+        enddatel.append(year+'-'+month+'-01')
+        
+#Get All the Betas
+#Define Factor DataFrame
+RSIBeta = pd.DataFrame()
+MinBeta = pd.DataFrame()
+SizeBeta = pd.DataFrame()
+OCFPBeta = pd.DataFrame()
+for enddate in enddatel:
+    RSIBeta = pd.concat([RSIBeta,pd.DataFrame(GetBeta(RSIIndividual,stock,enddate))],axis = 1)
+    MinBeta = pd.concat([MinBeta,pd.DataFrame(GetBeta(Min130Day,stock,enddate))],axis = 1)
+    SizeBeta = pd.concat([SizeBeta,pd.DataFrame(GetBeta(EquitySize,stock,enddate))],axis = 1)
+    OCFPBeta = pd.concat([OCFPBeta,pd.DataFrame(GetBeta(EquityOCFP,stock,enddate))],axis = 1)
+RSIBeta.columns = enddatel
+MinBeta.columns = enddatel
+SizeBeta.columns = enddatel
+OCFPBeta.columns = enddatel
+RSIBeta.index = ['RSI']
+MinBeta.index = ['Min130']
+SizeBeta.index = ['Size']
+OCFPBeta.index = ['OCFP']
+
+
+#Get All Residuals
+ResidualAll = pd.DataFrame()
+for enddate in enddatel:
+    tempresidual = GetResiduals(stock,enddate)
+    ResidualAll = pd.concat([ResidualAll,tempresidual],axis = 1,join='outer')
+ResidualAll.columns = enddatel
