@@ -1,0 +1,5 @@
+#Get the Covariance Matrix of the Residuals
+ResidualCov = ResidualAll.T.cov()
+#Get the Covariance Matrix of the Factor Earnings
+BetaAll = pd.concat([RSIBeta,MinBeta,SizeBeta,OCFPBeta],axis = 0,join='outer')
+BetaCov = BetaAll.T.cov()
