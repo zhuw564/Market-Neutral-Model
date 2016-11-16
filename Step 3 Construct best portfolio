@@ -1,0 +1,102 @@
+#Optimize portfolio part
+#w should be as long as BetaAll and the calculated 
+stock = IndRisk.columns
+end = '2015-01-01'
+#Size of all variables should be w = 1*n, f = 4*1, x = n*4, TotalReturn = w*(x*f)
+#Those with nans are changed to 0
+#One thing to be modified here is that we put StockReturn (f and x) as input, or they are going to be computed for too many times
+
+RSIv = RSIIndividual(stock,end)
+Minv = Min130Day(stock,end)
+Sizev = EquitySize(stock,end)
+OCFPv = EquityOCFP(stock,end)
+RSIb = GetBeta(RSIIndividual,stock,end)
+Minb = GetBeta(Min130Day,stock,end)
+Sizeb = GetBeta(EquitySize,stock,end)
+OCFPb = GetBeta(EquityOCFP,stock,end)
+f = np.concatenate((RSIb,Minb,Sizeb,OCFPb))
+x = pd.concat((RSIv,Minv,Sizev,OCFPv),axis = 1)
+x = x.fillna(0).as_matrix()
+StockReturn = np.matmul(x,f)
+
+
+def ExpReturn(w,StockReturn):
+    return np.matmul(w,StockReturn)
+    
+ExpReturn(w,StockReturn)
+
+#######################################optimize portfolio part!#################################################
+#try a simple optimizer
+from scipy.optimize import minimize 
+
+#We'd better use lambda function to define constrain here
+#def func(x, R):
+#    """ Objective function """
+#    return np.matmul(x,R.T)
+
+#objective function:
+#ExpReturn(w,stock,end)
+
+cons = ({'type': 'eq',
+         'fun' : lambda w: np.array(sum(w.T) - 1)})
+
+bnds = ((0, 0.2),) * 286
+
+res = minimize(ExpReturn, np.full((1, 286), 1/286), args=(StockReturn,), bounds=bnds,
+               constraints=cons, method='SLSQP', options={'disp': True})
+               
+               
+#######################################final optimize portfolio#################################################
+#a more realistic optimizer
+#Data Prepare
+w = np.full((1, 286), 1/286)
+RSIv = RSIIndividual(stock,end)
+Minv = Min130Day(stock,end)
+Sizev = EquitySize(stock,end)
+OCFPv = EquityOCFP(stock,end)
+RSIb = GetBeta(RSIIndividual,stock,end)
+Minb = GetBeta(Min130Day,stock,end)
+Sizeb = GetBeta(EquitySize,stock,end)
+OCFPb = GetBeta(EquityOCFP,stock,end)
+f = np.concatenate((RSIb,Minb,Sizeb,OCFPb))
+x = pd.concat((RSIv,Minv,Sizev,OCFPv),axis = 1)
+x = x.fillna(0).as_matrix()
+StockReturn = np.matmul(x,f)
+FactorLoading = x
+BetaCov = GetBetaCovEsti(0,lam,h,BetaAll)
+IndCov = GetIndRiskCovEsti(0,lam,h,ResidualAll) 
+#Tool Function
+def MyVar(w,BetaCov,ResidualCov,FactorLoading):
+    part1 = np.matmul(FactorLoading,BetaCov)
+    part2 = np.matmul(part1,FactorLoading.T) + ResidualCov
+    part3 = np.matmul(w,part2)
+    pos = ~np.isnan(part3)
+    part3 = part3[pos]
+    w = w[pos]
+    part4 = np.matmul(part3,w.T)
+    return math.sqrt(part4)
+
+#objective function:
+def RiskAdjReturn(w,StockReturn,BetaCov,IndCov,FactorLoading):
+    ExpReturn = np.matmul(w,StockReturn)
+    Std = MyVar(w,BetaCov,IndCov,FactorLoading)
+    return -(ExpReturn-0.5*(Std**2))
+
+#Constrains for sum of weight equeals to 1 and Factor Loading of a certain factor as 0
+cons = ({'type': 'eq',
+         'fun' : lambda w: np.array(sum(w.T) - 1)},
+       {'type': 'eq',
+         'fun' : lambda w: np.array(np.matmul(w,FactorLoading[:,0]))})
+
+#bands that make sure we don't have weights too extrem
+bnds = ((0, 0.2),) * 286
+
+#Train the optimizer
+res = minimize(RiskAdjReturn, np.full((1, 286), 1/286), args=(StockReturn,BetaCov,IndCov,FactorLoading,), bounds=bnds,
+               constraints=cons, method='SLSQP', options={'disp': True})
+               
+               
+#Store our result and some tests
+w = res.x
+-RiskAdjReturn(w,StockReturn,BetaCov,IndCov,FactorLoading)
+ExpReturn(w,StockReturn)
