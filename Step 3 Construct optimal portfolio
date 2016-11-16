@@ -100,3 +100,43 @@ res = minimize(RiskAdjReturn, np.full((1, 286), 1/286), args=(StockReturn,BetaCo
 w = res.x
 -RiskAdjReturn(w,StockReturn,BetaCov,IndCov,FactorLoading)
 ExpReturn(w,StockReturn)
+
+
+#Get the information of our hedging index
+#Here we use CSI50 as hedgeing index, we can change this part is we want
+HedgingStock = index_components('000016.XSHG')
+wHedge = np.full((1, 50), 1/50)
+RSIHedgev = RSIIndividual(HedgingStock,end)
+MinHedgev = Min130Day(HedgingStock,end)
+SizeHedgev = EquitySize(HedgingStock,end)
+OCFPHedgev = EquityOCFP(HedgingStock,end)
+xHedgeind = pd.concat((RSIHedgev,MinHedgev,SizeHedgev,OCFPHedgev),axis = 1)
+xHedgeind.columns = ['RSIHedgev','MinHedgev','SizeHedgev','OCFPHedgev']
+xHedgeT = np.zeros(4)
+for i in list(range(1,xHedgeind.shape[1]+1)):
+    for j in list(range(1,len(wHedge)+1)):
+        if ~np.isnan(xHedgeind.ix[i-1,j-1]):
+            xHedgeT[i-1] = xHedgeT[i-1] + wHedge.T[j-1] * xHedgeind.ix[i-1,j-1]
+            
+#xHedgeT is the total exposure on factors for the specific hedging index
+###########################optimize portfolio matching hedging index!######################################
+#objective function:
+def RiskAdjReturn(w,StockReturn,BetaCov,IndCov,FactorLoading,xHedgeT):
+    ExpReturn = np.matmul(w,StockReturn)
+    Std = MyVar(w,BetaCov,IndCov,FactorLoading)
+    return -(ExpReturn-0.5*(Std**2))
+
+#Constrains for sum of weight equeals to 1 and Factor Loading of a certain factor as 0
+cons = ({'type': 'eq',
+         'fun' : lambda w: np.array(sum(w.T) - 1)},
+       {'type': 'eq',
+         'fun' : lambda w: np.array(np.matmul(w,FactorLoading[:,0])-xHedgeT[0])},
+       {'type': 'eq',
+         'fun' : lambda w: np.array(np.matmul(w,FactorLoading[:,1])-xHedgeT[1])})
+
+#bands that make sure we don't have weights too extrem
+bnds = ((0, 0.2),) * 286
+
+#Train the optimizer
+res = minimize(RiskAdjReturn, np.full((1, 286), 1/286), args=(StockReturn,BetaCov,IndCov,FactorLoading,xHedgeT,), bounds=bnds,
+               constraints=cons, method='SLSQP', options={'disp': True})
