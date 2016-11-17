@@ -87,6 +87,113 @@ def GetResiduals(stock,enddate):
     Xinput = [EquityOCFP(stock,enddate), EquitySize(stock,enddate), RSIIndividual(stock,enddate), Min130Day(stock,enddate)]
     X = pd.concat(Xinput, axis=1)
     date = enddate
+#做到report 12页
+#有一个相关的问题就是为什么我们需要用日数据进行回归？我们的持仓周期不是一般是月度的吗
+#Things to do tonight:
+#1.Use linprog to realize the single factor test:
+#https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linprog.html#scipy.optimize.linprog
+#2.Use min function to optimize the final portfolio, use the following question for reference:
+#http://stackoverflow.com/questions/37791680/scipy-optimize-minimize-slsqp-with-linear-constraints-fails
+#also, use global variable to avoid more inputs
+#3.In the calculation of R, we use the linear regression we developed before as the expected return
+#The newest beta times weight times factor return is the expected return that we want
+
+
+#Keep in mind that we need factor exposure to 0 but not factor loading
+#The factors that we select in this strategy
+#Also, we use linear Regression First, later can be changed to WLS like in the report of GuoTaiJunAn
+#let's start from smaller ones (4 items) and then add them more and more
+#Here the factors are already normalized
+#In fact, the most important thing is that maybe we can use this framework to backtest the factors more efficiently because all other 
+#factors have been eliminated
+def RSIIndividual(stock,end):
+    window_length = 14
+    start = "{:%Y-%m-%d}".format(datetime.datetime.strptime(end, '%Y-%m-%d') - datetime.timedelta(days=window_length))
+    data = get_price(list(stock), start, end_date=end, frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    close = data
+    delta = close.diff()
+    delta = delta[1:]
+    up, down = delta.copy(), delta.copy()
+    up[up < 0] = 0
+    down[down > 0] = 0
+    roll_up1 = pd.stats.moments.ewma(up, window_length)
+    roll_down1 = pd.stats.moments.ewma(down.abs(), window_length)
+    RS1 = roll_up1 / roll_down1
+    RSI1 = 100.0 - (100.0 / (1.0 + RS1))
+    FactorValue = RSI1.iloc[-1]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+
+def Min130Day(stock,enddate): 
+    startdate = "{:%Y-%m-%d}".format(datetime.datetime.strptime(enddate, '%Y-%m-%d') - datetime.timedelta(days=130))
+    if len(stock) != 0 :
+        prices = get_price(list(stock), startdate, end_date=enddate, frequency='1d', fields=None, adjusted=True)['OpeningPx']
+        returns = np.log(prices/prices.shift(1)).iloc[1:-1]
+        MinReturn = returns.min()
+        FactorValue = MinReturn
+        FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+        return FactorValue
+    else:
+        return pd.Series(1000, index = ['000001.XSHE'])
+
+    
+#Thing is that sometimes the date that we input is not working day, if so, we select the most recent working day's value as the value for this
+def EquitySize(stock,enddate):
+    date = enddate
+    fundamental_df = get_fundamentals(
+        query(
+            fundamentals.eod_derivative_indicator.market_cap 
+        ).filter(
+            fundamentals.income_statement.stockcode.in_(stock)
+        ),entry_date = date
+    )
+    FactorValue = fundamental_df['market_cap'].iloc[0]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+    
+def EquityOCFP(stock,enddate):
+    date = enddate
+    fundamental_df = get_fundamentals(
+        query(
+            fundamentals.financial_indicator.operating_cash_flow_per_share 
+        ).filter(
+            fundamentals.income_statement.stockcode.in_(stock)
+        ),entry_date = date
+    )
+    prices = get_price(list(stock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=10)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    FactorValue = fundamental_df['operating_cash_flow_per_share'].iloc[0]/prices.iloc[0]
+    FactorValue = (FactorValue - np.mean(FactorValue))/np.std(FactorValue)
+    return FactorValue
+
+
+def GetIC(f,*args):
+    FactorValue = f(*args)
+    date = args[1]
+    tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    tempreturn = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
+    DataAll = pd.concat([FactorValue,tempreturn],axis = 1)
+    DataAll = DataAll.dropna()
+    return np.corrcoef(np.array(DataAll.ix[:,0].T.rank().T),np.array(DataAll.ix[:,1].T.rank().T))[0,1]
+
+#In order to get daily Beta and Residuals, we can change the enddate from monthly to daily
+#Here we test it as Monthly
+def GetBeta(f,*args):
+    FactorValue = f(*args)
+    date = args[1]
+    #Get 20 Business day's data
+    tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + \
+                                                                     datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
+    tempreturn = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
+    DataAll = pd.concat([FactorValue,tempreturn],axis = 1)
+    DataAll = DataAll.dropna()
+    regr = linear_model.LinearRegression()
+    regr.fit(np.transpose(np.matrix(DataAll.ix[:,0])), np.transpose(np.matrix(DataAll.ix[:,1])))
+    return regr.coef_
+
+def GetResiduals(stock,enddate):
+    Xinput = [EquityOCFP(stock,enddate), EquitySize(stock,enddate), RSIIndividual(stock,enddate), Min130Day(stock,enddate)]
+    X = pd.concat(Xinput, axis=1)
+    date = enddate
     tempprice = get_price(list(AllStock), date, "{:%Y-%m-%d}".format(datetime.datetime.strptime(date, '%Y-%m-%d') + datetime.timedelta(days=30)), frequency='1d', fields=None, adjusted=True)['OpeningPx']
     y = np.log(tempprice.iloc[-1]/tempprice.iloc[0])
     DataAll = pd.concat([X,y],axis = 1)
@@ -99,8 +206,31 @@ def GetResiduals(stock,enddate):
     residuals.columns = [enddate]
     return residuals
 
-GetBeta(EquitySize,AllStock,enddatel[0])
-GetResiduals(stock,enddatel[0])
+#This function is used in the later function
+def lamtotal(lam,h):
+    total = 0
+    for i in list(range(h,-1,-1)):
+        total = total + lam ** (i)
+    return total
+
+#input as Series, date of series should be increasing
+#We also need to deal with isnan here, modify this part later
+def EWMA(Series1,Series2,lam,h):
+    Sm1 = np.mean(Series1)
+    Sm2 = np.mean(Series2)
+    l1 = len(Series1)
+    l2 = len(Series2)
+    total = 0
+    for i in list(range(h,0,-1)):
+        #print(Series1.iloc[l1-i])
+        #if ~np.isnan(Series1.iloc[l1-i])&~np.isnan(Series1.iloc[l1-i]):
+        total = total + ((lam ** i) *(Series1.iloc[l1-i] - Sm1)*(Series2.iloc[l1-i] - Sm2))
+    total = total/lamtotal(lam,i)
+    return total
+
+#GetBeta(EquitySize,AllStock,enddatel[0])
+#GetResiduals(stock,enddatel[0])
+
 
 #Prepare
 import pandas as pd
